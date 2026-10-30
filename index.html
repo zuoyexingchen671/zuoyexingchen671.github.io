@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#17685e" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="医脉" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" href="/icon-192.png" />
+    <link rel="stylesheet" href="/style.css" />
+    <title>医脉 · 试用版</title>
+    <script src="/browser-store.js" defer></script>
+<script src="/app.js" defer></script>
+<script src="/phone-backup.js" defer></script>
+    <script src="/workspace.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a href="#input" class="brand"
+        ><span class="brand-icon">脉</span
+        ><span>医脉<small>让每份资料都有归处</small></span></a
+      ><button id="help-button" class="quiet">使用帮助</button>
+    </header>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <main>
+      <div id="person-context" class="banner" hidden></div>
+      <section id="pair-view" class="view narrow">
+        <span class="eyebrow">连接你的试用资料库</span>
+        <h1>欢迎使用医脉</h1>
+        <p class="lead">拍照添加资料，按人整理，随时回看。</p>
+        <form id="pair-form" class="card stack">
+          <label for="pair-code">电脑上显示的 12 位配对码</label
+          ><input
+            id="pair-code"
+            inputmode="numeric"
+            autocomplete="off"
+            maxlength="12"
+            required
+            placeholder="请输入配对码"
+          /><button class="primary">连接试用版</button>
+          <p class="muted">
+            配对码相同的设备可查看同一份试用资料，不是独立账号。请先使用合成资料体验。
+          </p>
+        </form>
+      </section>
+      <section id="input-view" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <h1>这次哪里不舒服？</h1>
+            <p>看医生前，说说本次症状，结合此人的既往病史整理就诊话语。</p>
+          </div>
+          <span class="chip">手机版 · 本机保存</span>
+        </div>
+        <div class="consultation-layout">
+          <article id="input-start" class="card stack" hidden>
+            <h2>先建立一份人物档案</h2>
+            <p>拍照导入病历，识别姓名后自动建档；也可以先在个人中心添加人物。</p>
+            <div class="upload-actions">
+              <a href="#upload" class="upload-button primary">拍照建立档案</a>
+              <a href="#center" class="upload-button">打开个人中心</a>
+            </div>
+          </article>
+          <form id="input-form" class="card stack">
+            <div class="section-heading">
+              <h2>说说本次情况</h2>
+              <button type="button" id="voice-button" class="text-button">
+                语音输入
+              </button>
+            </div>
+            <label for="symptoms">这次有什么不舒服？</label
+            ><textarea
+              id="symptoms"
+              rows="5"
+              maxlength="10000"
+              placeholder="例如：咳嗽三天，晚上更明显，今天开始发热。"
+              required
+            ></textarea>
+            <div class="input-assist" role="group" aria-label="可选的描述提示">
+              <span>不知道怎么说？可以补充</span>
+              <button type="button" data-prompt="开始时间">开始时间</button>
+              <button type="button" data-prompt="症状变化">症状变化</button>
+              <button type="button" data-prompt="已经做过的处理">做过的处理</button>
+            </div>
+            <p id="voice-status" class="muted" aria-live="polite">
+              支持打字和语音转文字；识别结果请检查后再提交。
+            </p>
+            <p id="conversation-note" class="muted">
+              当前为新会话。每个人的历史分别保存。
+            </p>
+            <div class="actions">
+              <button type="button" id="new-input">新建会话</button
+              ><button class="primary" id="submit-button">整理成给医生看的话</button>
+            </div>
+            <p class="muted">当前是资料整理，不生成疾病诊断或治疗建议。</p>
+          </form>
+        </div>
+      </section>
+      <section id="upload-view" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <h1>上传本次就诊结果</h1>
+            <p>看完医生后，拍下病历、药单或检查结果，自动整理进此人的既往病史。</p>
+          </div>
+        </div>
+        <article class="card stack">
+          <h2>上传本次病历、处方或检查单</h2>
+          <div class="upload-actions">
+            <label class="upload-button primary" for="camera">拍照添加</label
+            ><label class="upload-button" for="files">相册 / PDF</label>
+          </div>
+          <input
+            id="camera"
+            class="file-input"
+            type="file"
+            accept="image/jpeg,image/png"
+            capture="environment"
+          /><input
+            id="files"
+            class="file-input"
+            type="file"
+            accept="image/jpeg,image/png,image/bmp,application/pdf"
+            multiple
+          />
+          <p class="muted">
+            单份不超过 25MB，每次最多 20 份。HEIC 暂不支持，请改用
+            JPG。在手机上识别，原件保存在当前浏览器，不上传至服务器。首次识别需联网下载组件，请保持页面打开。
+          </p>
+          <p id="upload-status" aria-live="polite"></p>
+          <button id="go-review">到个人中心查看原件</button>
+        </article>
+        <p id="review-upload-status" class="muted" aria-live="polite"></p>
+      </section>
+      <section id="result-view" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <h1>本次就诊准备</h1>
+            <p>先看给医生的话，需要时再展开完整资料。</p>
+          </div>
+          <button id="result-back" type="button">← 返回</button
+          ><a href="#input">补充本次情况</a>
+        </div>
+        <article id="result" class="card stack" hidden></article>
+      </section>
+      <section id="history-view" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <h1>既往病史</h1>
+            <p>过敏、手术、慢病、疫苗和用药，集中在这里查看。</p>
+          </div>
+        </div>
+        <div id="history-content" class="card stack"></div>
+      </section>
+      <section id="review-view" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <h1>历史记录</h1>
+            <p>查看此人的问话与整理结果；照片和 PDF 原件统一保存在个人中心。</p>
+          </div>
+          <button id="retry-button">重试未完成任务</button>
+        </div>
+        <div id="conversation-records" class="card stack"></div>
+
+        <div id="jobs" class="jobs"></div>
+        <div id="document-list" class="document-grid" hidden></div>
+      </section>
+      <section id="document-view" class="view" hidden>
+        <div class="verify-heading">
+          <button id="document-back" type="button">← 返回</button>
+          <h1>原件与文字核对</h1>
+        </div>
+        <p
+          id="document-feedback"
+          class="banner review-feedback"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></p>
+        <div id="document-detail" hidden></div>
+      </section>
+      <select id="input-person" hidden aria-hidden="true" tabindex="-1"></select>
+      <section id="center-view" class="view" hidden>
+        <div class="page-heading">
+          <div>
+            <h1>每个人，一份清楚的档案</h1>
+            <p>在这里切换人物，查找每个人的病历原件和以往记录。</p>
+          </div>
+          <button id="add-person-button" class="primary">＋ 添加人物</button>
+        </div>
+        <p id="unassigned-note" class="banner"></p>
+        <div id="person-list" class="people-grid"></div>
+        <div id="person-detail" class="card stack" hidden></div>
+        <form id="person-form" class="card stack narrow" hidden>
+          <h2>添加人物</h2>
+          <label for="person-name">姓名</label
+          ><input
+            id="person-name"
+            minlength="2"
+            maxlength="40"
+            required
+            autocomplete="off"
+          /><label for="person-alias">区分备注（可留空）</label
+          ><input
+            id="person-alias"
+            maxlength="40"
+            placeholder="例如同事、朋友或你熟悉的代号"
+          /><label for="person-birthday">出生日期（不知道可留空）</label
+          ><input id="person-birthday" type="date" />
+          <p class="muted">允许同名；同名有歧义时，只需选择一次正确人物。</p>
+          <div class="actions">
+            <button type="button" id="cancel-person">取消</button
+            ><button class="primary">保存人物</button>
+          </div>
+        </form>
+      </section>
+      <section id="help-view" class="view narrow" hidden>
+        <span class="eyebrow">使用帮助</span>
+        <h1>围绕一个人，完成一次就诊准备</h1>
+        <article class="card stack">
+          <h2>本次输入</h2>
+          <p>就诊前描述症状，结合当前人物的既往病史，整理给医生的话。</p>
+          <h2>就诊结果上传</h2>
+          <p>就诊后上传病历、处方和检查单，自动归档并按病史类别整理。</p>
+          <h2>资料检查</h2>
+          <p>
+            拍照后自动提取和归档，完成结果原地显示。只有重名、姓名不清等情况需要选择人物；可以随时纠正识别。
+          </p>
+          <h2>个人中心与病史导出</h2>
+          <p>
+            选择人物，查看过敏史、手术史、慢病和疫苗分区，分别阅读已核对文字与仍需确认信息，并可导出病史文本。未确认属于谁的资料单独列出。
+          </p>
+          <h2>语音输入</h2>
+          <p>
+            点击输入页的“语音输入”，支持时会说明浏览器语音服务及其数据处理。也可以点手机键盘的麦克风。识别后都需检查文字。
+          </p>
+          <h2>添加到手机主屏幕</h2>
+          <p>
+            iPhone：使用 Safari
+            打开，点分享，再选择“添加到主屏幕”。安卓：使用支持安装的浏览器，在菜单中选择“安装应用”或“添加到主屏幕”。完整安装需要可信
+            HTTPS；普通局域网 HTTP 不保证能安装。
+          </p>
+          <p id="connection-info" class="banner"></p>
+          <h2>资料保存在何处？</h2>
+          <p>
+            这一版资料保存在当前手机浏览器，不会自动同步。清除网站数据、无痕模式或更换浏览器可能导致资料丢失。请先使用虚构资料，并通过个人中心备份。
+          </p>
+          <p>
+            本版不读取电脑档案，未接入语言模型。浏览器保存原件、识别文字与历史结果；语音识别是否联网取决于浏览器或输入法。
+          </p>
+          <button id="logout-button">重新打开应用</button>
+        </article>
+      </section>
+    </main>
+    <nav id="navigation" aria-label="主要功能" hidden>
+      <a href="#input" data-view="input"
+        ><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 5v14M5 12h14" /></svg
+        >本次就诊</a
+      >
+      <a href="#upload" data-view="upload" aria-label="就诊结果上传"
+        ><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M7 3h7l4 4v14H6V3zM14 3v5h4M9 13h6M9 17h4" /></svg
+        ><span class="nav-full" aria-hidden="true">就诊结果上传</span
+        ><span class="nav-short" aria-hidden="true">结果上传</span></a
+      >
+      <a href="#history" data-view="history"
+        ><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" /></svg
+        >既往病史</a
+      >
+      <a href="#review" data-view="review"
+        ><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 7v5l3 2" /></svg
+        >历史记录</a
+      >
+      <a href="#center" data-view="center"
+        ><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="8" r="3" />
+          <path d="M5 21v-3a7 7 0 0 1 14 0v3" /></svg
+        >个人中心</a
+      >
+    </nav>
+    <dialog id="review-dialog">
+      <div id="review-dialog-body" class="stack"></div>
+      <form method="dialog"><button>关闭</button></form>
+    </dialog>
+    <dialog id="voice-dialog">
+      <form method="dialog" class="stack">
+        <h2>启用浏览器语音识别？</h2>
+        <p>
+          语音可能由浏览器厂商的远程服务处理，并非医脉本地识别。服务和可用性由浏览器决定，尚未完成医疗隐私评估；请仅用合成描述试用。识别文字不会自动提交。
+        </p>
+        <div class="actions">
+          <button value="cancel">暂不启用</button
+          ><button value="start" class="primary">同意并开始</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
