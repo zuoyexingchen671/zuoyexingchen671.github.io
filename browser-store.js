@@ -395,6 +395,7 @@
     if (p === '/api/session' || p === '/api/pair') return { csrf: 'phone-local' };
     if (p === '/api/state')
       return {
+        model_assist: window.YimaiCloud ? await window.YimaiCloud.status() : undefined,
         people: copy(value.people),
         documents: value.documents.map(summary),
         conversations: value.conversations.map(({ turns, ...c }) => copy(c)),
@@ -506,6 +507,36 @@
       value.revision++;
       await save();
       return { ok: true };
+    }
+    if (p === '/api/model/preview') {
+      const c = value.conversations.find((c) => c.id === data.conversation_id);
+      const t = c?.turns.find((t) => t.id === data.turn_id);
+      if (!t || c.person_id !== data.person_id || !window.YimaiCloud)
+        throw Error('本次整理对象或云端服务无效。');
+      return window.YimaiCloud.preview(t, person(c.person_id), value.revision);
+    }
+    if (p === '/api/model/execute') {
+      if (!window.YimaiCloud) throw Error('智能整理未启用。');
+      for (const c of value.conversations)
+        for (const t of c.turns) {
+          if (t.id !== data.turn_id) continue;
+          const result = await window.YimaiCloud.execute(
+            data,
+            t,
+            c.person_id,
+            value.revision
+          );
+          if (t.archive_version !== value.revision)
+            throw Error('资料已变化，请重新整理。');
+          t.report.local_doctor_brief ||= copy(t.report.doctor_brief);
+          t.report.doctor_brief = result.brief;
+          t.report.model_assist = Object.fromEntries(
+            Object.entries(result).filter(([k]) => k !== 'brief')
+          );
+          await save();
+          return result;
+        }
+      throw Error('本次记录不存在。');
     }
     if (p === '/api/submit') {
       person(data.person_id);

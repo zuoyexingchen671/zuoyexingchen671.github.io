@@ -1146,7 +1146,13 @@ async function openConversation(id) {
       );
       detail.append(original);
     }
-    if (!t.stale && state.data?.model_assist?.available && !window.YimaiBrowser) {
+    if (window.YimaiBrowser && !state.data?.model_assist?.available) {
+      section(
+        '智能整理状态',
+        state.data?.model_assist?.message || '当前使用本地整理，云端智能整理尚未启用。'
+      );
+    }
+    if (!t.stale && state.data?.model_assist?.available) {
       const cloud = node('section', '', 'result-section');
       const current = () =>
         state.person === personId &&
@@ -1196,6 +1202,7 @@ async function openConversation(id) {
                 preview.replaceChildren();
                 try {
                   const response = await api('/api/model/execute', {
+                    turn_id: t.id,
                     token: value.token,
                     confirmed: true,
                   });
