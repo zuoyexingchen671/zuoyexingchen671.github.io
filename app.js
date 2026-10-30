@@ -1060,8 +1060,7 @@ $('input-form').addEventListener(
   guard(async (event) => {
     event.preventDefault();
     endSpeech();
-    if (!state.person)
-      throw Error('请先在个人中心选择人物；也可以在就诊结果上传页拍照建档。');
+    if (!state.person) throw Error('请先在个人中心选择或添加人物。');
     const submitPerson = state.person;
     $('submit-button').disabled = true;
     try {
@@ -1163,14 +1162,52 @@ async function openConversation(id) {
       detail.append(e);
       return e;
     }
-    if (!t.stale)
-      detail.append(
-        button('一键导出本次整理资料', () =>
+    const isCurrent = () =>
+      state.person === personId &&
+      state.conversation === id &&
+      state.active === 'result' &&
+      state.turns[Number(select.value)]?.id === t.id;
+    if (!t.stale) {
+      const actions = node('div', '', 'actions');
+      const feedback = node('p', '本次整理已保存，可在历史记录中查看。', 'muted');
+      feedback.setAttribute('role', 'status');
+      actions.append(
+        button(
+          '复制给医生',
+          async () => {
+            if (!isCurrent()) return;
+            const exported = await api(
+              `/api/export?conversation_id=${encodeURIComponent(id)}&turn_id=${encodeURIComponent(t.id)}`
+            );
+            if (!isCurrent()) return;
+            try {
+              if (!navigator.clipboard?.writeText) throw Error('clipboard unavailable');
+              await navigator.clipboard.writeText(exported.content);
+              if (isCurrent()) feedback.textContent = '已复制，可粘贴给医生查看。';
+            } catch {
+              if (!isCurrent()) return;
+              feedback.textContent =
+                '浏览器没有允许自动复制，可长按或选中下方文字复制。';
+              const fallback = node('textarea');
+              fallback.value = exported.content;
+              fallback.readOnly = true;
+              fallback.rows = 5;
+              fallback.setAttribute('aria-label', '可选中复制的就诊说明');
+              feedback.replaceChildren(node('span', feedback.textContent), fallback);
+              fallback.focus();
+              fallback.select?.();
+            }
+          },
+          'primary'
+        ),
+        button('导出本次整理', () =>
           downloadExport(
             `/api/export?conversation_id=${encodeURIComponent(id)}&turn_id=${encodeURIComponent(t.id)}`
           )
         )
       );
+      detail.append(actions, feedback);
+    }
     section(
       '可以对医生这样说',
       report.doctor_brief?.speech || report.current_description
@@ -1179,6 +1216,34 @@ async function openConversation(id) {
       '摘要说明',
       report.doctor_brief?.notice || '历史版本，请更新后查看新摘要。'
     );
+    const briefSources = report.doctor_brief?.sources;
+    if (briefSources?.length) {
+      const evidence = node('details', '', 'result-section');
+      evidence.append(
+        node('summary', `这段说明引用了哪些资料 · ${briefSources.length} 条`)
+      );
+      for (const source of briefSources) {
+        const entry = node('div', '', 'result-section');
+        entry.append(
+          node('p', source.value),
+          node(
+            'p',
+            `${source.document_kind || '医疗资料'} · 第${source.evidence?.page || 1}页 · ${source.status === '已核验' ? '文字已核对' : '文字待核对'}`,
+            'muted'
+          )
+        );
+        if (source.document_id)
+          entry.append(
+            button(
+              '查看原件出处',
+              () => openDocument(source.document_id),
+              'text-button'
+            )
+          );
+        evidence.append(entry);
+      }
+      detail.append(evidence);
+    }
     if (report.model_assist) {
       section(
         '模型整理记录',
@@ -1229,7 +1294,19 @@ async function openConversation(id) {
             if (!current()) return;
             const manifest = value.manifest;
             feedback.textContent = `${manifest.disclosure.recipient} · ${value.model} · 五分钟内有效`;
-            const text = node('pre', JSON.stringify(manifest.payload, null, 2));
+            const payload = manifest.payload;
+            const facts = payload.facts || [];
+            const previewText =
+              `本次症状：\n${payload.current_description || '未提供'}\n\n既往资料：\n` +
+              (facts.length
+                ? facts
+                    .map(
+                      (f, i) =>
+                        `${i + 1}. ${f.field}${f.uncertain ? '（待核对 / 存疑）' : ''}：${f.text}`
+                    )
+                    .join('\n')
+                : '没有可发送的既往记录，仅整理本次症状。');
+            const text = node('pre', previewText);
             text.setAttribute(
               'style',
               'white-space:pre-wrap;overflow-wrap:anywhere;max-height:16rem;overflow:auto'

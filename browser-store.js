@@ -151,38 +151,69 @@
     const hs = sections(pid),
       checked = hs.flatMap((s) => s.checked),
       uncertain = hs.flatMap((s) => s.uncertain);
-    const relevant = hs.filter((_, i) => [0, 2, 4].includes(i));
-    const facts = relevant.flatMap((s) => s.checked).map((c) => c.value);
-    const doubts = relevant.flatMap((s) => s.uncertain).map((c) => c.value);
+    const sources = hs
+      .flatMap((section) => [...section.checked, ...section.uncertain])
+      .filter((c) => c.field !== '文档日期');
+    const blocks = hs
+      .map((section) => {
+        const records = [...section.checked, ...section.uncertain].filter(
+          (c) => c.field !== '文档日期'
+        );
+        if (!records.length) return '';
+        return (
+          `${section.title}：\n` +
+          records
+            .map(
+              (c) =>
+                `${c.certainty.reasons.length ? '【待核对】' : '【历史记载】'}${c.value}`
+            )
+            .join('\n')
+        );
+      })
+      .filter(Boolean);
     const speech =
       `医生您好，这次主要想咨询：${symptoms}\n\n` +
-      (facts.length
-        ? `既往资料中记载：${facts.slice(0, 12).join('；')}。这些是历史记录，请结合原件核对。\n\n`
-        : '目前没有已核对的相关病史记录，不能据此认为没有病史。\n\n') +
-      (doubts.length
-        ? `另外有些信息还不确定：${doubts.slice(0, 8).join('；')}。\n\n`
-        : '') +
-      '想请您帮我确认还需要补充哪些情况，以及哪些既往资料需要关注。';
+      (blocks.length
+        ? blocks.join('\n\n')
+        : '目前没有可整理的既往资料，不能据此认为没有病史。') +
+      '\n\n以上是历史资料，历史处方不代表目前仍在服用。标为待核对的文字可能存在识别错误或不确定表述，请结合原件核对，并告诉我还需补充哪些情况。';
     return {
       current_description: symptoms,
       doctor_brief: {
         speech,
-        notice: '按本次自述与过敏、慢病、用药记录整理；未做医学相关性判断，不是诊断。',
+        notice:
+          '按本次自述与各类历史记录整理，待核对内容单独标出；没有推断当前用药或生成诊断。',
+        sources,
       },
       facts: checked,
       document_count: value.documents.filter((d) => d.person_id === pid).length,
       pending_count: uncertain.length,
-      method: '手机本地模板整理，未接入语言模型',
+      method: '此结果由本地规则整理；可在结果页另行选择 DeepSeek 辅助筛选。',
       analysis: { history_sections: hs, temporal: { states: [] } },
     };
   }
   function createTurn(conv, symptoms, refresh_of = '') {
+    let source = refresh_of ? conv.turns.find((t) => t.id === refresh_of) : null;
+    // 更新历史快照沿用当时的会话范围，不能把后来的补充混入旧记录。
+    const visited = new Set();
+    while (source?.report.refresh_of && !visited.has(source.id)) {
+      visited.add(source.id);
+      source = conv.turns.find((t) => t.id === source.report.refresh_of);
+    }
+    const end = source ? conv.turns.indexOf(source) : conv.turns.length;
+    const previous = conv.turns.slice(0, end).filter((t) => !t.report.refresh_of);
+    const description = previous.length
+      ? '本次就诊此前自述：\n' +
+        previous.map((t, i) => `${i + 1}. ${t.symptoms}`).join('\n') +
+        '\n\n本次补充：' +
+        symptoms
+      : symptoms;
     const t = {
       id: id(),
       created_at: now(),
       symptoms,
       archive_version: value.revision,
-      report: report(conv.person_id, symptoms),
+      report: report(conv.person_id, description),
     };
     if (refresh_of) t.report.refresh_of = refresh_of;
     conv.turns.push(t);

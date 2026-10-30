@@ -50,7 +50,11 @@
         .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, '[邮箱已遮蔽]');
     const sources = (report.analysis?.history_sections || [])
       .flatMap((s) => [...s.checked, ...s.uncertain])
-      .filter((f) => f.status === '已核验' && fields.has(f.field));
+      .map((f) => ({
+        ...f,
+        field: f.field === '诊断相关记载' ? '病历诊断记载' : f.field,
+      }))
+      .filter((f) => fields.has(f.field));
     if (sources.length > 150)
       throw Error('资料较多，暂超出本次智能整理上限；完整病史仍可查看。');
     const payload = {
@@ -60,6 +64,7 @@
         field: f.field,
         text: clean(f.value),
         uncertain:
+          f.status !== '已核验' ||
           f.certainty?.bucket === 'uncertain' ||
           !!f.certainty?.reasons?.length ||
           f.manual_uncertain === true,
@@ -84,7 +89,8 @@
         '仅用于虚构资料试验。确认后，预览文字将经云端发送到DeepSeek，小组共用每日20次限额。',
       manifest: {
         payload,
-        notice: '常见标识符遮蔽不能保证完全匿名。原件、其他人物和未核对文字不发送。',
+        notice:
+          '原件和其他人物资料不发送。本次可包含待核对识别文字，均标为存疑；常见标识符遮蔽不能保证完全匿名。',
         disclosure: {
           recipient: 'DeepSeek官方API（通过医脉云端服务）',
           purpose: '筛选本次就诊相关病史，保留来源和存疑',
@@ -132,7 +138,9 @@
     const lines = ['医生您好，这次主要想咨询：' + turn.report.current_description];
     for (const f of sources)
       lines.push(
-        (f.certainty?.reasons?.length ? '【仍需确认】' : '【历史记载】') + f.value
+        (f.status !== '已核验' || f.manual_uncertain || f.certainty?.reasons?.length
+          ? '【仍需确认】'
+          : '【历史记载】') + f.value
       );
     if (!sources.length) lines.push('本次未选出既往记录，不能据此认为没有相关病史。');
     lines.push(
