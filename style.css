@@ -1597,12 +1597,55 @@ nav a.active {
     overflow: hidden;
   }
 }
-@media(max-width:800px) {
- #center-view {overflow:hidden;}
- #center-view > .page-heading {flex:none;}
- #center-view[data-area=archive] #add-person-button,#center-view[data-area=backup] #add-person-button {display:none;}
- #person-list,#person-detail,#person-form,.backup-panel {min-height:0;overflow:auto;overscroll-behavior:contain;flex:1;}
- #unassigned-note {flex:none;}
- #history-content,#conversation-records {min-height:0;overflow:auto;flex:1;}
- #history-view,#review-view {overflow:hidden;}
+@media (max-width: 800px) {
+  #center-view {
+    overflow: hidden;
+  }
+  #center-view > .page-heading {
+    flex: none;
+  }
+  #center-view[data-area='archive'] #add-person-button,
+  #center-view[data-area='backup'] #add-person-button {
+    display: none;
+  }
+  #person-list,
+  #person-detail,
+  #person-form,
+  .backup-panel {
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    flex: 1;
+  }
+  #unassigned-note {
+    flex: none;
+  }
+  #history-content,
+  #conversation-records {
+    min-height: 0;
+    overflow: auto;
+    flex: 1;
+  }
+  #history-view,
+  #review-view {
+    overflow: hidden;
+  }
+}
+
+/* 业务入口保留清楚文字，人物未选择时解释前置条件。 */
+nav a[aria-disabled='true'] {
+  color: #657782;
+  background: transparent;
+}
+nav a[aria-current='page'] {
+  color: #125b7b;
+  background: #e3f0f7;
+  font-weight: 700;
+}
+nav a[aria-current='page'] svg {
+  stroke-width: 2.4;
+}
+nav a:focus-visible {
+  outline: 3px solid #176b91;
+  outline-offset: -3px;
 }

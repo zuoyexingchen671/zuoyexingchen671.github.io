@@ -143,12 +143,20 @@ function selectPerson(id) {
     $('symptoms').value = state.personDrafts[id] || '';
   }
   state.person = id || null;
+  try {
+    if (window.YimaiBrowser) {
+      if (id) window.localStorage?.setItem('yimai-selected-person', id);
+      else window.localStorage?.removeItem('yimai-selected-person');
+    }
+  } catch {}
+  $('input-form').hidden = !state.person;
+  $('input-start').hidden = !!state.person;
   $('input-person').value = id || '';
   $('input-person').hidden = true;
   const p = state.data?.people.find((item) => item.id === id);
   document.querySelector('#input-view h1').textContent = p
     ? `${p.name}的本次就诊`
-    : '先选择人物，或拍照建立档案';
+    : '先选择人物';
   document.querySelector('#history-view h1').textContent = p
     ? `${p.name}的既往病史`
     : '既往病史';
@@ -169,7 +177,7 @@ async function showHistory() {
   if (!state.person) {
     host.replaceChildren();
     host.append(
-      node('p', '先在个人中心选择人物，或在本次就诊拍照建档。'),
+      node('p', '先在个人中心选择或添加人物。'),
       button('选择人物', () => go('center'))
     );
     return;
@@ -205,8 +213,13 @@ async function showHistory() {
 }
 function navigate(view) {
   if (!state.csrf) return;
+  if (!state.person && view !== 'center' && view !== 'help') {
+    view = 'center';
+    say('请先选择或添加一位人物，再开始就诊或上传资料。');
+  }
   if (view === 'result' && !state.conversation) view = 'input';
   if (view === 'document' && !state.document) view = 'review';
+  if (location.hash !== `#${view}`) location.hash = `#${view}`;
   const changed = state.active !== view;
   if (changed) say('');
   state.active = view;
@@ -216,14 +229,20 @@ function navigate(view) {
   document
     .querySelectorAll('.view')
     .forEach((e) => (e.hidden = e.id !== `${view}-view`));
-  document
-    .querySelectorAll('nav a')
-    .forEach((e) =>
-      e.classList.toggle(
-        'active',
-        e.dataset.view === (view === 'document' ? 'review' : view)
-      )
+  const navView = view === 'document' ? 'review' : view === 'result' ? 'input' : view;
+  document.querySelectorAll('nav a').forEach((e) => {
+    const current = e.dataset.view === navView;
+    e.classList.toggle('active', current);
+    e.setAttribute('aria-current', current ? 'page' : 'false');
+    e.setAttribute(
+      'aria-disabled',
+      String(!state.person && e.dataset.view !== 'center')
     );
+    e.title =
+      !state.person && e.dataset.view !== 'center'
+        ? '请先在个人中心选择人物'
+        : e.getAttribute?.('aria-label') || e.textContent;
+  });
   if (changed) window.scrollTo({ top: 0, behavior: 'instant' });
   if (view === 'center') {
     renderPeople();
@@ -239,7 +258,7 @@ function navigate(view) {
 }
 async function refresh() {
   state.data = await api('/api/state');
-  const selected = $('input-person').value;
+  const selected = state.person;
   $('input-person').replaceChildren(
     Object.assign(node('option', '请选择人物'), { value: '' })
   );
@@ -257,7 +276,7 @@ async function refresh() {
     const jobs = state.data.jobs.filter(
       (j) =>
         state.batches.includes(j.id) &&
-        (!state.person || state.batchPeople[j.id] === state.person)
+        (!state.person || (state.batchPeople[j.id] || j.selected) === state.person)
     );
     const docs = jobs
       .map((j) => state.data.documents.find((d) => d.id === j.document_id))
@@ -296,6 +315,12 @@ async function refresh() {
 async function connected(data) {
   state.csrf = data.csrf;
   await refresh();
+  let saved;
+  try {
+    if (window.YimaiBrowser)
+      saved = window.localStorage?.getItem('yimai-selected-person');
+  } catch {}
+  selectPerson(state.data.people.some((p) => p.id === saved) ? saved : null);
   $('pair-view').hidden = true;
   $('navigation').hidden = false;
   navigate(location.hash.slice(1) || 'input');
@@ -376,11 +401,21 @@ $('input-person').addEventListener('change', () =>
   selectPerson($('input-person').value)
 );
 async function upload(files) {
+  if (!state.person) {
+    go('center');
+    throw Error('请先选择人物，再上传资料。');
+  }
   if (!files.length) return;
   if (files.length > 20) throw Error('每次最多添加20份资料');
   for (const file of files) {
     if (file.size > 25 * 1024 * 1024) throw Error('单份资料不能超过25MB');
-    if (!/\.(jpe?g|png|bmp|pdf)$/i.test(file.name))
+    if (
+      !/\.(jpe?g|png|bmp|pdf)$/i.test(file.name) &&
+      !(
+        !/\.[^.]+$/.test(file.name) &&
+        /^(image\/(jpeg|png|bmp)|application\/pdf)$/.test(file.type)
+      )
+    )
       throw Error('暂不支持此格式；HEIC 请转为 JPG 后添加。');
   }
   const uploadPerson = state.person;
@@ -426,7 +461,7 @@ for (const id of ['camera', 'files'])
     guard((event) => upload(Array.from(event.target.files)))
   );
 $('retry-button').onclick = guard(async () => {
-  await api('/api/retry', {});
+  await api('/api/retry', { person_id: state.person });
   await refresh();
   say('已安排重试未完成任务。');
 });
@@ -458,14 +493,17 @@ function renderConversations() {
 function renderDocuments() {
   if (!state.data) return;
   const owned = state.data.documents.filter(
-    (d) => state.person && d.person?.id === state.person
+    (d) =>
+      state.person &&
+      (d.person?.id === state.person ||
+        (d.upload_person_id === state.person && !d.person))
   );
   const ownedIds = new Set(owned.map((d) => d.id));
   const jobs = state.data.jobs.filter(
     (j) =>
       j.status !== 'completed' &&
       (ownedIds.has(j.document_id) ||
-        (state.person && state.batchPeople[j.id] === state.person))
+        (state.person && (state.batchPeople[j.id] || j.selected) === state.person))
   );
   $('jobs').textContent = jobs.length
     ? jobs.map((j, i) => `任务${i + 1}：${jobLabels[j.status] || '待处理'}`).join(' · ')
@@ -475,7 +513,7 @@ function renderDocuments() {
   for (const d of owned) {
     const c = node('article', '', 'card stack');
     c.append(
-      node('h3', d.kind),
+      node('h3', d.original_name ? `${d.kind} · ${d.original_name}` : d.kind),
       node('p', `${d.person?.name || '尚未确认属于谁'} · ${date(d.uploaded_at)}`),
       node(
         'p',
@@ -515,9 +553,6 @@ function renderPeople() {
       );
     $('unassigned-note').append(waiting);
   }
-  $('unassigned-note').append(
-    button('拍照建立新档案', () => go('upload'), 'text-button')
-  );
   const list = $('person-list');
   list.replaceChildren();
   for (const p of state.data.people) {
@@ -537,11 +572,7 @@ function renderPeople() {
   }
   if (!state.data.people.length)
     list.append(
-      node(
-        'p',
-        '还没有人物档案。点击“添加人物”，也可以先上传资料再带入识别姓名。',
-        'empty'
-      )
+      node('p', '还没有人物档案。点击“添加人物”，填写姓名后即可开始。', 'empty')
     );
 }
 function row(title, subtitle, action, label) {
@@ -625,8 +656,16 @@ function renderHistory(host, sections) {
   }
 }
 async function openPerson(id, scroll = true) {
+  const firstChoice = !state.person && scroll;
   selectPerson(id);
   renderPeople();
+  if (firstChoice) {
+    go('input');
+    say('人物已选好，可以描述本次症状，或到结果上传添加资料。');
+    return;
+  }
+  $('person-detail').hidden = false;
+  $('person-detail').replaceChildren(node('p', '正在读取此人的资料…', 'muted'));
   const data = await api(`/api/person?id=${encodeURIComponent(id)}`);
   if (state.person !== id || state.active !== 'center') return;
   const panel = $('person-detail');
@@ -739,7 +778,7 @@ async function openDocument(id) {
   let saving = false;
   const drafts = {};
   const ordered = () => {
-    const all = d.candidates.map((c, i) => ({ c, i }));
+    const all = d.processing ? [] : d.candidates.map((c, i) => ({ c, i }));
     const key = all.filter(({ c }) => /药物|诊断/.test(c.field));
     return key.length ? key : all;
   };
@@ -841,6 +880,14 @@ async function openDocument(id) {
       button('姓名', assignment, 'text-button')
     );
     host.append(progress);
+    if (d.processing)
+      host.append(
+        node(
+          'p',
+          '原件已保存，正在识别。可先查看原件，识别完成后重新打开此记录。',
+          'banner'
+        )
+      );
     const tabs = node('div', '', 'verify-tabs');
     const switchPane = (next) => {
       pane = next;
@@ -1013,14 +1060,14 @@ $('input-form').addEventListener(
   guard(async (event) => {
     event.preventDefault();
     endSpeech();
-    if (!$('input-person').value)
+    if (!state.person)
       throw Error('请先在个人中心选择人物；也可以在就诊结果上传页拍照建档。');
     const submitPerson = state.person;
     $('submit-button').disabled = true;
     try {
       const value = await api('/api/submit', {
         symptoms: $('symptoms').value,
-        person_id: $('input-person').value,
+        person_id: state.person,
         conversation_id: state.conversation || '',
       });
       if (state.person !== submitPerson) return;

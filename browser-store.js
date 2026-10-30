@@ -44,14 +44,31 @@
         db.transaction('archive').objectStore('archive').get('current')
       )) || fresh();
   }
-  async function save() {
+  async function save(force = false) {
     await new Promise((resolve, reject) => {
       const tx = db.transaction('archive', 'readwrite');
-      tx.objectStore('archive').put(value, 'current');
-      tx.oncomplete = resolve;
+      const store = tx.objectStore('archive');
+      const previous = value.storage_revision || 0;
+      let next;
+      const current = store.get('current');
+      current.onsuccess = () => {
+        const stored = current.result?.storage_revision || 0;
+        if (!force && stored !== previous) {
+          reject(Error('另一个窗口已更新资料，请重新打开此页面后再试，避免覆盖记录。'));
+          tx.abort();
+          return;
+        }
+        next = stored + 1;
+        store.put({ ...value, storage_revision: next }, 'current');
+      };
+      tx.oncomplete = () => {
+        value.storage_revision = next;
+        resolve();
+      };
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error);
-    }).catch(() => {
+    }).catch((error) => {
+      if (/另一个窗口/.test(error?.message)) throw error;
       throw Error('手机存储未能写入，请释放空间或退出无痕模式后重试。');
     });
   }
@@ -86,16 +103,25 @@
     const checked = d.candidates.filter((c) => c.status === '已核验').length;
     return {
       id: d.id,
+      original_name: d.name,
+      processing: !!d.processing,
       kind: d.kind,
       uploaded_at: d.uploaded_at,
+      upload_person_id: d.upload_person_id || null,
+      candidate_count: d.candidates.length,
+      checked_count: checked,
       person: value.people.find((p) => p.id === d.person_id) || null,
-      status: d.error
-        ? '识别未完成，原件已保存'
-        : !d.candidates.length
-          ? '原件已保存，未提取文字'
-          : checked === d.candidates.length
-            ? '文字核对完成'
-            : `已核对 ${checked}/${d.candidates.length} 条`,
+      status: d.processing
+        ? '原件已保存，正在识别'
+        : d.assignment_pending
+          ? '原件已保存，姓名需要核对'
+          : d.error
+            ? '识别未完成，原件已保存'
+            : !d.candidates.length
+              ? '原件已保存，未提取文字'
+              : checked === d.candidates.length
+                ? '文字核对完成'
+                : `已核对 ${checked}/${d.candidates.length} 条`,
       processing_error: d.error || '',
     };
   }
@@ -223,7 +249,13 @@
     if (names.size === 1) {
       const name = [...names][0],
         matches = value.people.filter((p) => p.name === name);
-      if (matches.length === 1) d.person_id = matches[0].id;
+      if (selected) {
+        if (person(selected).name === name) d.person_id = selected;
+        else {
+          d.person_id = null;
+          d.assignment_pending = true;
+        }
+      } else if (matches.length === 1) d.person_id = matches[0].id;
       else if (!matches.length) {
         const p = { id: id(), name, alias: '照片识别建档，姓名可核对', birthday: '' };
         value.people.push(p);
@@ -231,23 +263,50 @@
       }
       // 同名歧义保留待选择，不能用当前人物覆盖。
     } else if (!names.size && selected) d.person_id = person(selected).id;
+    else if (names.size > 1) {
+      d.person_id = null;
+      d.assignment_pending = true;
+    }
   }
   function blobURL(key, blob) {
     if (!urls.has(key)) urls.set(key, URL.createObjectURL(blob));
     return urls.get(key);
   }
   async function imageCanvas(blob) {
-    const bitmap = await createImageBitmap(blob),
-      scale = Math.min(1, 1800 / Math.max(bitmap.width, bitmap.height));
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(blob);
+    } catch {
+      bitmap = await new Promise((resolve, reject) => {
+        const image = new Image();
+        const url = URL.createObjectURL(blob);
+        image.onload = () => {
+          URL.revokeObjectURL(url);
+          resolve(image);
+        };
+        image.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(Error('照片无法读取，请改用 JPG 或 PNG'));
+        };
+        image.src = url;
+      });
+    }
+    const scale = Math.min(1, 1800 / Math.max(bitmap.width, bitmap.height));
     const c = document.createElement('canvas');
     c.width = Math.round(bitmap.width * scale);
     c.height = Math.round(bitmap.height * scale);
     c.getContext('2d').drawImage(bitmap, 0, 0, c.width, c.height);
-    bitmap.close();
+    bitmap.close?.();
     return c;
   }
   const canvasBlob = (canvas) =>
-    new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    new Promise((resolve, reject) =>
+      canvas.toBlob(
+        (blob) => (blob ? resolve(blob) : reject(Error('照片预览生成失败'))),
+        'image/jpeg',
+        0.85
+      )
+    );
   let ocrScript;
   async function loadOCR() {
     if (window.Tesseract) return;
@@ -275,29 +334,53 @@
       });
     await ocrScript;
   }
+  async function bounded(task, milliseconds, message) {
+    let timer;
+    try {
+      return await Promise.race([
+        task,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(Error(message)), milliseconds);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   async function recognize(canvas) {
     progress('正在准备识别组件…');
     await loadOCR();
     if (!worker) {
       progress('首次使用正在下载识别组件，请保持联网和页面打开…');
-      worker = await Tesseract.createWorker(['chi_sim', 'eng'], 1, {
-        workerPath:
-          'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js',
-        corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1',
-        langPath: 'https://tessdata.projectnaptha.com/4.0.0',
-        logger: (m) =>
-          progress(
-            m.status === 'recognizing text'
-              ? `正在手机上识别 ${Math.round((m.progress || 0) * 100)}%，请保持页面打开…`
-              : '正在准备手机识别组件…'
-          ),
-      }).catch((e) => {
+      worker = await bounded(
+        Tesseract.createWorker(['chi_sim', 'eng'], 1, {
+          workerPath:
+            'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/worker.min.js',
+          corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.1',
+          langPath: location.origin + '/ocr',
+          logger: (m) =>
+            progress(
+              m.status === 'recognizing text'
+                ? `正在手机上识别 ${Math.round((m.progress || 0) * 100)}%，请保持页面打开…`
+                : '正在准备手机识别组件…'
+            ),
+        }),
+        90000,
+        '识别组件下载超时'
+      ).catch((e) => {
         worker = null;
         throw e;
       });
     }
-    const result = await worker.recognize(canvas);
-    return result.data.text;
+    try {
+      const result = await bounded(worker.recognize(canvas), 90000, '文字识别超时');
+      if (!result.data.text.trim()) throw Error('未识别出文字');
+      return result.data.text;
+    } catch (e) {
+      worker?.terminate?.();
+      worker = null;
+      throw e;
+    }
   }
   async function process(d, selected) {
     for (const [key, url] of urls)
@@ -305,10 +388,15 @@
         URL.revokeObjectURL(url);
         urls.delete(key);
       }
+    const previousCandidates = copy(d.candidates);
+    const previousLines = copy(d.lines);
     d.lines = [];
     d.candidates = [];
     d.pageBlobs = [];
     d.error = '';
+    d.processing = true;
+    d.assignment_pending = false;
+    d.person_id = selected || d.person_id;
     try {
       if (d.name.toLowerCase().endsWith('.pdf')) {
         const pdfjs = await import(
@@ -368,9 +456,30 @@
         ? '处方或用药资料'
         : '医疗资料';
     } catch (e) {
-      d.error = '识别未完成，请联网后点“重试未完成任务”。原件已保存。';
+      d.error = /超时/.test(e.message)
+        ? '识别等待超时，原件已保存。请联网后重试。'
+        : /未识别出文字/.test(e.message)
+          ? '没有识别出文字，原件已保存。请重新拍摄清晰照片。'
+          : '识别未完成，原件已保存。请检查网络和照片格式，再点“重试未完成任务”。';
       console.warn('Local recognition failed:', e.name);
     }
+    // 失败后的重试保留已核对或手动更正的原文对应条目。
+    for (const c of d.candidates) {
+      const previous = previousCandidates.find(
+        (old) =>
+          old.field === c.field &&
+          (old.original || old.value) === c.value &&
+          previousLines[old.line]?.page === d.lines[c.line]?.page
+      );
+      if (previous)
+        Object.assign(c, {
+          value: previous.value,
+          original: previous.original,
+          status: previous.status,
+          manual_uncertain: previous.manual_uncertain,
+        });
+    }
+    d.processing = false;
     value.revision++;
     await save();
   }
@@ -400,7 +509,7 @@
         documents: value.documents.map(summary),
         conversations: value.conversations.map(({ turns, ...c }) => copy(c)),
         jobs: copy(value.jobs),
-        busy: false,
+        busy: value.jobs.some((j) => ['pending', 'running'].includes(j.status)),
       };
     if (p === '/api/people') {
       const name = (data.name || '').trim();
@@ -421,7 +530,11 @@
       return {
         person: copy(person(pid)),
         history_sections: hs,
-        documents: value.documents.filter((d) => d.person_id === pid).map(summary),
+        documents: value.documents
+          .filter(
+            (d) => d.person_id === pid || (!d.person_id && d.upload_person_id === pid)
+          )
+          .map(summary),
         conversations: value.conversations
           .filter((c) => c.person_id === pid)
           .map(({ turns, ...c }) => copy(c)),
@@ -431,7 +544,16 @@
     if (p === '/api/upload') {
       if (!data || !data.size || data.size > 25 * 1024 * 1024)
         throw Error('请选择25MB以内的照片或PDF。');
-      const name = q.get('name') || data.name || '';
+      let name = q.get('name') || data.name || '';
+      if (!/\.[^.]+$/.test(name)) {
+        const ext = {
+          'image/jpeg': '.jpg',
+          'image/png': '.png',
+          'image/bmp': '.bmp',
+          'application/pdf': '.pdf',
+        }[data.type];
+        if (ext) name = (name || '拍照资料') + ext;
+      }
       if (!/\.(png|jpe?g|bmp|pdf)$/i.test(name)) throw Error('仅支持照片或PDF。');
       const selected = q.get('person_id');
       if (selected) person(selected);
@@ -439,7 +561,9 @@
         id: id(),
         name,
         original: new Blob([data], { type: data.type || 'application/octet-stream' }),
-        person_id: null,
+        person_id: selected || null,
+        upload_person_id: selected || null,
+        processing: true,
         kind: '医疗资料',
         uploaded_at: now(),
         lines: [],
@@ -477,6 +601,8 @@
         reason: data.reason,
       });
       d.person_id = data.person_id;
+      d.upload_person_id = data.person_id;
+      d.assignment_pending = false;
       value.revision++;
       await save();
       return { ok: true };
@@ -607,7 +733,13 @@
       return { content, filename };
     }
     if (p === '/api/retry') {
-      for (const job of value.jobs.filter((j) => j.status === 'failed')) {
+      for (const job of value.jobs.filter(
+        (j) =>
+          ['failed', 'running', 'pending'].includes(j.status) &&
+          (!data?.person_id ||
+            doc(j.document_id).person_id === data.person_id ||
+            (!doc(j.document_id).person_id && j.selected === data.person_id))
+      )) {
         await process(doc(job.document_id), job.selected);
         job.status = doc(job.document_id).error ? 'failed' : 'completed';
       }
@@ -619,6 +751,12 @@
   }
   window.YimaiBrowser = {
     api(path, data) {
+      // 查询不排在长时间 OCR 后面；上传原件已先提交到 IndexedDB。
+      if (data === undefined)
+        return (async () => {
+          await (ready ||= init());
+          return route(path, data);
+        })();
       const run = tail.then(async () => {
         await (ready ||= init());
         try {
@@ -690,7 +828,7 @@
       const previous = value;
       value = v;
       try {
-        await save();
+        await save(true);
       } catch (e) {
         value = previous;
         throw e;
